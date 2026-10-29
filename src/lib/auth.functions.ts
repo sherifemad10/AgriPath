@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
+import { supabase } from "@/integrations/supabase/client";
 import type { PublicUser } from "@/server/auth";
 
 export type { PublicUser };
@@ -30,7 +31,7 @@ export const getCurrentUser = createServerFn({ method: "GET" }).handler(async ()
   return currentUser();
 });
 
-export const signInAccount = createServerFn({ method: "POST" })
+const signInLocalAccount = createServerFn({ method: "POST" })
   .validator((d: unknown) => signInValidator.parse(d))
   .handler(async ({ data }) => {
     const { clientIp, isEmail, rateLimit } = await import("@/server/security");
@@ -44,7 +45,7 @@ export const signInAccount = createServerFn({ method: "POST" })
     return toPublic(user);
   });
 
-export const signUpAccount = createServerFn({ method: "POST" })
+const signUpLocalAccount = createServerFn({ method: "POST" })
   .validator((d: unknown) => signUpValidator.parse(d))
   .handler(async ({ data }) => {
     const { clientIp, isEmail, rateLimit, sanitizeText } = await import("@/server/security");
@@ -66,20 +67,110 @@ export const signUpAccount = createServerFn({ method: "POST" })
     }
   });
 
-export const signOutAccount = createServerFn({ method: "POST" }).handler(async () => {
+const signOutLocalAccount = createServerFn({ method: "POST" }).handler(async () => {
   const { clearSession } = await import("@/server/auth");
   await clearSession();
   return { ok: true };
 });
 
+function supabaseConfigured() {
+  const configured = Boolean(
+    import.meta.env["VITE_SUPABASE_URL"] &&
+      import.meta.env["VITE_SUPABASE_PUBLISHABLE_KEY"],
+  );
+  if (!configured && import.meta.env.PROD) {
+    throw new Error("Missing Supabase environment variables");
+  }
+  return configured;
+}
+
+async function toPublicSupabaseUser(user: {
+  id: string;
+  email?: string;
+  user_metadata?: Record<string, unknown>;
+}): Promise<PublicUser> {
+  let role: PublicUser["role"] = "user";
+  const { data: claimedAdmin, error: claimError } = await supabase.rpc("claim_admin");
+  if (!claimError && claimedAdmin) {
+    role = "admin";
+  } else {
+    const { data: roles } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", user.id);
+    if (roles?.some((entry) => entry.role === "admin")) role = "admin";
+  }
+
+  const metadataName = user.user_metadata?.["name"];
+  return {
+    id: user.id,
+    email: user.email ?? "",
+    name: typeof metadataName === "string" ? metadataName : user.email?.split("@")[0] ?? "User",
+    role,
+  };
+}
+
+export async function signInAccount({ data }: { data: z.infer<typeof signInValidator> }) {
+  if (!supabaseConfigured()) return signInLocalAccount({ data });
+  const { data: result, error } = await supabase.auth.signInWithPassword(data);
+  if (error) {
+    if (error.code === "invalid_credentials") throw new Error("INVALID_CREDENTIALS");
+    throw error;
+  }
+  if (!result.user) throw new Error("INVALID_CREDENTIALS");
+  return toPublicSupabaseUser(result.user);
+}
+
+export async function signUpAccount({ data }: { data: z.infer<typeof signUpValidator> }) {
+  if (!supabaseConfigured()) return signUpLocalAccount({ data });
+  const { data: result, error } = await supabase.auth.signUp({
+    email: data.email,
+    password: data.password,
+    options: { data: { name: data.name.trim().slice(0, 80) } },
+  });
+  if (error) {
+    if (error.code === "user_already_exists") throw new Error("EMAIL_TAKEN");
+    throw error;
+  }
+  if (!result.user) throw new Error("SIGNUP_FAILED");
+  if (!result.session) throw new Error("EMAIL_CONFIRMATION_REQUIRED");
+  return toPublicSupabaseUser(result.user);
+}
+
+export async function signOutAccount() {
+  if (!supabaseConfigured()) return signOutLocalAccount();
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+  return { ok: true };
+}
+
 export const saveProgress = createServerFn({ method: "POST" })
   .validator((d: unknown) => progressValidator.parse(d))
   .handler(async ({ data }) => {
-    const { currentUser } = await import("@/server/auth");
-    const { withDb } = await import("@/server/store");
-
+    const { currentUser, supabaseForCurrentRequest } = await import("@/server/auth");
     const user = await currentUser();
     if (!user) return { ok: false };
+
+    const supabaseClient = supabaseForCurrentRequest();
+    if (supabaseClient) {
+      const { error } = await supabaseClient.from("user_progress").upsert(
+        {
+          user_id: user.id,
+          primary_specialization: data.primarySpecialization,
+          level: data.level,
+          career_goal: data.careerGoal,
+          interests: data.interests,
+          completed_topics: data.completedTopics,
+          completed_projects: data.completedProjects,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" },
+      );
+      if (error) throw error;
+      return { ok: true };
+    }
+
+    const { withDb } = await import("@/server/store");
     await withDb((db) => {
       const row = {
         userId: user.id,

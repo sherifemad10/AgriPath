@@ -1,7 +1,9 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { deleteCookie, getCookie, getRequest, setCookie } from "@tanstack/react-start/server";
+import { createClient } from "@supabase/supabase-js";
 
+import type { Database } from "@/integrations/supabase/types";
 import { readDb, withDb, type StoredUser, type UserRole } from "./store";
 
 const scryptAsync = promisify(scrypt);
@@ -51,6 +53,35 @@ function cookieSecure() {
 
 export function toPublic(user: StoredUser): PublicUser {
   return { id: user.id, email: user.email, name: user.name, role: user.role };
+}
+
+function supabaseEnvironment() {
+  const url = process.env["SUPABASE_URL"] ?? process.env["VITE_SUPABASE_URL"];
+  const key =
+    process.env["SUPABASE_PUBLISHABLE_KEY"] ??
+    process.env["SUPABASE_ANON_KEY"] ??
+    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"];
+  return url && key ? { url, key } : null;
+}
+
+function requestAccessToken() {
+  try {
+    const authorization = getRequest().headers.get("authorization");
+    return authorization?.startsWith("Bearer ") ? authorization.slice(7) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function supabaseForCurrentRequest() {
+  const environment = supabaseEnvironment();
+  const token = requestAccessToken();
+  if (!environment || !token) return null;
+
+  return createClient<Database>(environment.url, environment.key, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
 }
 
 export const PRIMARY_ADMIN_EMAIL = "dr.sherifemadd@gmail.com";
@@ -126,6 +157,31 @@ export async function clearSession() {
 }
 
 export async function currentUser(): Promise<PublicUser | null> {
+  if (supabaseEnvironment()) {
+    const token = requestAccessToken();
+    const client = supabaseForCurrentRequest();
+    if (!token || !client) return null;
+
+    const { data, error } = await client.auth.getUser(token);
+    if (error || !data.user) return null;
+
+    await client.rpc("claim_admin");
+    const { data: roles } = await client
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", data.user.id);
+    const metadataName = data.user.user_metadata["name"];
+    return {
+      id: data.user.id,
+      email: data.user.email ?? "",
+      name:
+        typeof metadataName === "string"
+          ? metadataName
+          : data.user.email?.split("@")[0] ?? "User",
+      role: roles?.some((entry) => entry.role === "admin") ? "admin" : "user",
+    };
+  }
+
   const token = getCookie(COOKIE);
   if (!token) return null;
   const hash = hashToken(token);

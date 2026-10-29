@@ -84,8 +84,22 @@ function AuthPage() {
       const msg = String((err as Error).message ?? err);
       if (msg.includes("INVALID_CREDENTIALS")) toast.error(ar ? "البريد أو كلمة المرور غير صحيحة" : "Invalid email or password");
       else if (msg.includes("EMAIL_TAKEN")) toast.error(ar ? "هذا البريد مسجّل بالفعل" : "Email already registered");
+      else if (msg.includes("EMAIL_CONFIRMATION_REQUIRED")) {
+        toast.success(
+          ar
+            ? "تم إنشاء الحساب. افتح بريدك الإلكتروني وأكّد الحساب قبل تسجيل الدخول."
+            : "Account created. Check your email and confirm your account before signing in.",
+        );
+      }
       else if (msg.includes("ACCOUNT_DISABLED")) toast.error(ar ? "تم إيقاف هذا الحساب" : "This account is disabled");
       else if (msg.includes("Too many")) toast.error(ar ? "محاولات كثيرة، انتظر قليلًا" : "Too many attempts, wait a moment");
+      else if (msg.includes("Missing Supabase environment")) {
+        toast.error(
+          ar
+            ? "إعدادات Supabase غير مكتملة في إعدادات النشر."
+            : "Supabase environment variables are missing from the deployment settings.",
+        );
+      }
       else toast.error(ar ? "تعذر إتمام العملية" : msg);
     }
     setBusy(false);
