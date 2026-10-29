@@ -44,10 +44,12 @@ function AdminPage() {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    void getCurrentUser().then((u) => {
-      setUser(u);
-      setChecked(true);
-    });
+    void getCurrentUser()
+      .then(setUser)
+      .catch((error: unknown) => {
+        toast.error(String((error as Error).message ?? error));
+      })
+      .finally(() => setChecked(true));
   }, []);
 
   const ready = checked && user && user.role === "admin" && user.email.toLowerCase() === "dr.sherifemadd@gmail.com";
@@ -154,13 +156,30 @@ function AdminLogin() {
       return;
     }
     try {
-      if (mode === "in") await signInAccount({ data: { email, password } });
-      else await signUpAccount({ data: { name: "Dr. Sherif Emad", email, password } });
+      const user =
+        mode === "in"
+          ? await signInAccount({ data: { email, password } })
+          : await signUpAccount({ data: { name: "Dr. Sherif Emad", email, password } });
+      if (user.role !== "admin") {
+        toast.error("تم الدخول، لكن صلاحية المسؤول غير مفعّلة. طبّق migration الخاصة بمنح دور المسؤول على Supabase.");
+        setBusy(false);
+        return;
+      }
       window.location.reload();
     } catch (e) {
-      toast.error(String((e as Error).message));
+      const message = String((e as Error).message ?? e);
+      if (message.includes("EMAIL_CONFIRMATION_REQUIRED")) {
+        toast.success("تم إنشاء الحساب. أكّد بريدك الإلكتروني أولًا، ثم ارجع لتسجيل الدخول.");
+      } else if (message.toLowerCase().includes("email not confirmed")) {
+        toast.error("أكّد بريدك الإلكتروني من الرسالة المرسلة إليك قبل تسجيل الدخول.");
+      } else if (message.includes("Missing Supabase environment")) {
+        toast.error("إعدادات Supabase غير مكتملة في إعدادات Vercel.");
+      } else {
+        toast.error(message);
+      }
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   return (
