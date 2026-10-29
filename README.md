@@ -1,5 +1,8 @@
 # Agri Career Navigator
 
+<img width="1910" height="5116" alt="screencapture-agriipath-vercel-app-2026-10-29-21_47_15" src="https://github.com/user-attachments/assets/3ca21af0-438b-4b5d-b0ef-27ec0177bba7" />
+
+
 Build a Production-Ready AI Career Mentor Platform for Agricultural Engineers
 
 1. PRODUCT VISION
